@@ -83,7 +83,6 @@ tidy(anova(lm_model)) %>%
 
 
 LASSO Regression because there's probably a ton of over fitting in the linear model
-# Stores into x and y matrix (predictors and targets)
 ```{r}
 library(Matrix)
 library(glmnet)
@@ -116,7 +115,6 @@ colnames(x) <- colnames(x) %>%
 y <- olympics_lasso$medal_value
 ```
 
-# Scaled parameters
 ```{r}
 x_scaled <- scale(x)
 
@@ -128,7 +126,6 @@ x_scale <- attr(x_scaled, "scaled:scale")
 # new_age_scaled <- (input$age - x_center["age"]) / x_scale["age"]
 ```
 
-# Used glmnet for LASSO
 ```{r}
 glmnet_model <- glmnet(x_scaled, y, alpha = 1)
 
