@@ -1,10 +1,10 @@
 # r-olympic-swimming-predictor
-This is a shiny app built with R that forecasts Olympic medals through two different methods: Linear and LASSO regression modeling.
+This is a shiny app built with R that forecasts Olympic medals in swimming events through two different methods: Linear and LASSO regression modeling.
 
 ---
 
 ## Overview
-This app uses athlete data from the 8/6/2024 TidyTuesday project "Olympic Medals". The data provided from TidyTuesday is sourced from Kaggle's Olympic history data, which covers the Olympics between 1896-2016. In this model, we used data from swimming events to base our models. Users can input gender (sex), age, height, weight, country (NOC codes), year, and Olympic event to get a predicted medal value.
+This app uses athlete data from the 8/6/2024 TidyTuesday project "Olympic Medals". The data provided from TidyTuesday is sourced from Kaggle's Olympic history data, which covers the Olympics between 1896-2016. In this model, we focus solely on swimming events to base our model upon. Users can input gender (sex), age, height, weight, country (NOC codes), year, and Olympic event to get a predicted medal value.
 
 ![App Screenshot](images/shiny_app.png)
 
