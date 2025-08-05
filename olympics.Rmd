@@ -1,0 +1,300 @@
+---
+title: "Olympics"
+author: "Ryan Chen"
+date: "2025-08-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+library(tidyverse)
+library(broom)
+library(tidytext)
+library(stringr)
+library(data.table)
+
+theme_set(theme_light())
+
+olympics_raw <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2024/2024-08-06/olympics.csv')
+```
+
+Clean Up Code
+```{r}
+olympics <- olympics_raw %>% 
+  add_count(noc, name = "noc_count") %>% 
+  filter(noc_count > 1) %>%
+  add_count(team, name = "team_count") %>% 
+  filter(team_count > 31) %>% 
+  select(-noc_count, -team_count) %>% 
+  relocate(noc, .after = weight) %>% 
+  relocate(year, .after = noc) %>% 
+  relocate(sport, .after = year) %>% 
+  filter(!is.na(height), !is.na(weight), !is.na(age)) %>% 
+  filter(year >= 1960) %>% 
+  mutate(medal_value = case_when(
+    medal == "Gold" ~ 3,
+    medal == "Silver" ~ 2,
+    medal == "Bronze" ~ 1,
+    TRUE ~ 0
+  )) %>% 
+  relocate(medal, .after = year) %>% 
+  relocate(medal_value, .before = medal) %>% 
+  filter(sport == "Swimming")
+  
+olympics %>% 
+  count(noc) %>% 
+  arrange(n) %>%
+  View()
+```
+
+
+Analyze Data
+```{r}
+
+
+```
+
+
+Linear Regression Model to estimate expected medal value for swimmers
+Includes these data points:
+Age, height, weight, noc
+NOTE: Afraid of overfitting if using specific sport
+```{r}
+lm_model <- olympics %>% 
+  mutate(
+    noc = fct_lump(noc, n = 100)
+  ) %>%
+  lm(medal_value ~ age + height + weight + noc, data = .)
+
+
+lm_model %>% 
+  tidy(conf.int = TRUE) %>% 
+  filter(term != "(Intercept)") %>% 
+  mutate(term = fct_reorder(term, estimate)) %>% 
+  ggplot(aes(estimate, term)) + 
+  geom_point() + 
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high))
+  
+lm_model %>% 
+  augment(data = olympics) %>% 
+  ggplot(aes(.fitted, medal_value)) +
+  geom_point(alpha = 0.3)
+
+tidy(anova(lm_model)) %>% 
+  # What percent of the variance is explained by the factors?
+  mutate(sumsq / sum(sumsq))
+```
+
+
+
+LASSO Regression because there's probably a ton of over fitting in the linear model
+# Stores into x and y matrix (predictors and targets)
+```{r}
+library(Matrix)
+library(glmnet)
+
+olympics_lasso <- olympics %>% 
+  filter(!is.na(sex), !is.na(age), !is.na(height), !is.na(weight), !is.na(noc), !is.na(medal_value), !is.na(year), !is.na(event)) %>%
+  select(sex, age, height, weight, noc, year, event, medal_value) %>% 
+  mutate(
+    sex = factor(sex),
+    noc = factor(noc),
+    event = factor(event)
+  )
+
+lasso_levels <- list(
+  sex = levels(olympics_lasso$sex),
+  noc = levels(olympics_lasso$noc),
+  event = levels(olympics_lasso$event)
+)
+  
+
+# model.matrix identified all unique NOC codes, made a col for each, and made it a binary value for each (0 for no, 1 for yes), now not a categorical value
+# -1 used since using model.matrix usually has a baseline level, so -1 removes it
+x <- model.matrix(~ sex + age + height + weight + noc + year + event - 1, data = olympics_lasso) 
+
+colnames(x) <- colnames(x) %>%
+  str_remove("^noc") %>%
+  str_remove("^event") %>% 
+  str_remove("^Swimming\\s+")
+
+y <- olympics_lasso$medal_value
+```
+
+# Scaled parameters
+```{r}
+x_scaled <- scale(x)
+
+# Variables for Shiny App (use later)
+x_center <- attr(x_scaled, "scaled:center")
+x_scale <- attr(x_scaled, "scaled:scale")
+
+# Must do in shiny app, do for all variables
+# new_age_scaled <- (input$age - x_center["age"]) / x_scale["age"]
+```
+
+# Used glmnet for LASSO
+```{r}
+glmnet_model <- glmnet(x_scaled, y, alpha = 1)
+
+lasso_model <- cv.glmnet(x_scaled, y, alpha = 1)
+
+plot(glmnet_model)
+plot(lasso_model)
+
+lasso_model$lambda.1se
+# 0.01523254
+
+lasso_model$lambda.min
+# 0.001967358
+
+lambda <- lasso_model$lambda.min
+
+coef(lasso_model, s = "lambda.min")
+
+tidy(lasso_model$glmnet.fit) %>% 
+  filter(lambda == lasso_model$lambda.min,
+         term != "(Intercept)") %>% 
+  mutate(term = fct_reorder(term, estimate)) %>% 
+  ggplot(aes(term, estimate)) +
+  geom_col() + 
+  coord_flip()
+
+
+```
+
+
+
+
+Shiny App
+```{r}
+library(shiny)
+library(shinythemes)
+library(tidyverse)
+
+olympics <- olympics %>% 
+  mutate(
+    sex = factor(sex),
+    noc = factor(noc),
+    event = factor(event)
+)
+
+ui <- fluidPage(
+  theme = shinytheme("cerulean"),
+
+  navbarPage("Olympics Medal Predictor",
+    
+    tabPanel("Linear Model",
+             
+      sidebarPanel(
+        h4("Enter Athlete Info:"),
+        numericInput("lm_age", "Age:", value = 25, min = 10, max = 50),
+        numericInput("lm_height", "Height (cm):", value = 180, min = 100, max = 250),
+        numericInput("lm_weight", "Weight (kg):", value = 70, min = 50, max = 120),
+        selectInput("lm_noc", "NOC (Country Code):", choices = NULL)
+      ),
+      
+      mainPanel(
+        h4("Expected Medal Value:"),
+        verbatimTextOutput("lm_prediction")
+      )
+    ),
+    
+    tabPanel("LASSO Regression Model",
+                    
+      # sex + age + height + weight + noc + year + event
+      sidebarPanel(
+        h4("Enter Athlete Info:"),
+        selectInput("lasso_sex", "Gender:", choices = NULL),
+        numericInput("lasso_age", "Age:", value = 25, min = 10, max = 50),
+        numericInput("lasso_height", "Height (cm):", value = 180, min = 100, max = 250),
+        numericInput("lasso_weight", "Weight (kg):", value = 70, min = 50, max = 120),
+        selectInput("lasso_noc", "NOC (Country Code):", choices = NULL),
+        numericInput("lasso_year", "Year (1896-2016):", value = 2000, min = 1896, max = 2016, step = 4),
+        selectInput("lasso_event", "Event:", choices = NULL),
+      ),
+      
+      mainPanel(
+        h4("Expected Medal Value:"),
+        verbatimTextOutput("lasso_prediction")
+      )
+    )
+  )
+)
+
+
+
+server <- function(input, output, session) {
+  
+  observe({
+    updateSelectInput(session, "lm_noc",
+      choices = levels(lm_model$model$noc),
+      selected = levels(lm_model$model$noc)[1])
+  })
+  
+  observe({
+    updateSelectInput(session, "lasso_sex",
+      choices = lasso_levels$sex,
+      selected = lasso_levels$sex[1])
+    
+    updateSelectInput(session, "lasso_noc",
+      choices = lasso_levels$noc,
+      selected = lasso_levels$noc[1])
+    
+    updateSelectInput(session, "lasso_event",
+      choices = lasso_levels$event,
+      selected = lasso_levels$event[1])
+  })
+  
+  
+  output$lm_prediction <- renderText({
+    req(input$lm_noc)
+    
+    new_data <- tibble(
+      age = input$lm_age,
+      height = input$lm_height,
+      weight = input$lm_weight,
+      noc = factor(input$lm_noc, levels = levels(lm_model$model$noc))
+    )
+    
+    pred <- predict(lm_model, newdata = new_data)
+    
+    if (is.na(pred)) {
+      "Prediction isn't available for selected inputs."
+    } else {
+      paste("Expected Medal Value:", round(pred, 2))
+    }
+  })
+  
+  output$lasso_prediction <- renderText({
+    req(input$lasso_sex, input$lasso_age, input$lasso_height, input$lasso_weight, input$lasso_noc, input$lasso_year, input$lasso_event)
+    
+    new_data <- data.frame(
+      sex = factor(input$lasso_sex, levels = lasso_levels$sex),
+      age = input$lasso_age,
+      height = input$lasso_height,
+      weight = input$lasso_weight,
+      noc = factor(input$lasso_noc, levels = lasso_levels$noc),
+      year = input$lasso_year,
+      event = factor(input$lasso_event, levels = lasso_levels$event),
+      stringsAsFactors = TRUE
+    )
+    
+    new_mat <- model.matrix(~ sex + age + height + weight + noc + year + event - 1, data = new_data)
+    
+    new_scaled <- sweep(new_mat, 2, x_center, "-")
+    new_scaled <- sweep(new_scaled, 2, x_scale, "/")
+    
+    pred <- predict(lasso_model, newx = new_scaled, s = lambda)
+    
+    paste("Expected Medal Value:", round(pred[1], 2))
+  })
+  
+  
+}
+
+shinyApp(ui = ui, server = server)
+```
+
